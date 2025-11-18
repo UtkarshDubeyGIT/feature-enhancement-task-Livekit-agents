@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -6,14 +7,17 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    AgentStateChangedEvent,
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
     RunContext,
+    UserInputTranscribedEvent,
     cli,
     metrics,
     room_io,
 )
+from livekit.agents.voice.interrupt_handler import InterruptionFilter
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -102,6 +106,8 @@ async def entrypoint(ctx: JobContext):
         false_interruption_timeout=1.0,
     )
 
+    interruption_filter = InterruptionFilter()
+
     # log metrics as they are emitted, and total usage after session is over
     usage_collector = metrics.UsageCollector()
 
@@ -116,6 +122,33 @@ async def entrypoint(ctx: JobContext):
 
     # shutdown callbacks are triggered when the session is over
     ctx.add_shutdown_callback(log_usage)
+
+    async def _stop_tts() -> None:
+        try:
+            await session.interrupt()
+        except Exception:
+            logger.exception("Failed to interrupt TTS playback")
+
+    @session.on("agent_state_changed")
+    def _on_agent_state_changed(ev: AgentStateChangedEvent):
+        # schedule the async setter — non-blocking for the event loop
+        asyncio.create_task(interruption_filter.set_agent_speaking(ev.new_state == "speaking"))
+
+    async def _handle_transcript(ev: UserInputTranscribedEvent) -> None:
+        confidence = getattr(ev, "confidence", 1.0)
+        speaker_id = getattr(ev, "speaker_id", None)
+        outcome = await interruption_filter.handle_transcription_event(
+            ev.transcript,
+            confidence,
+            speaker_id,
+        )
+
+        if outcome == "interrupt":
+            await _stop_tts()
+
+    @session.on("user_input_transcribed")
+    def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
+        asyncio.create_task(_handle_transcript(ev))
 
     await session.start(
         agent=MyAgent(),

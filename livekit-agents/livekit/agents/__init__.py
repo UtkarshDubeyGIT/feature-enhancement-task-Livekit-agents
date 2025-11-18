@@ -28,6 +28,7 @@ from ._exceptions import (
     APITimeoutError,
     AssignmentTimeoutError,
 )
+from .voice.interrupt_handler import InterruptionFilter
 from .job import (
     AutoSubscribe,
     JobContext,
@@ -127,6 +128,7 @@ __all__ = [
     "function_tool",
     "ChatContext",
     "ChatItem",
+    "InterruptionFilter",
     "room_io",
     "RoomIO",
     "RoomInputOptions",
