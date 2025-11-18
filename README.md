@@ -1,198 +1,211 @@
 ## Voice Interruption Handling (Intern Task)
 
-### 1. What Changed
+## 1. What Changed
 
-New Module Added
+### **New Module Added**
 
-InterruptionFilter (under livekit.agents.voice.interrupt_handler)
-A fully async-safe interruption classifier that determines whether a transcript should:
-• ignore → treated as filler/noise
-• interrupt → agent should stop speaking
-• speech → normal user input (agent idle)
+**InterruptionFilter** (`livekit.agents.voice.interrupt_handler`)
 
-New Logic Introduced
-• Token-based detection of filler words: "uh", "umm", "hmm", "haan", "han", "mhm", "mm", "ah", "aha", "oh", "uh-huh", "mhmm"
-• Confidence-aware filtering: Ignores filler-only speech regardless of confidence; applies 0.6 threshold to non-filler speech to filter low-confidence noise
-• Async locking to avoid race conditions between VAD, STT, and agent speech state.
-• Runtime-configurable ignored-word list using:
-• Constructor argument
-• Environment variable: IGNORED_WORDS="uh,umm,..."
+An async-safe classifier that decides whether a transcript should be:
 
-Changes Inside basic_agent.py
-• Integrated InterruptionFilter into UserInputTranscribedEvent pipeline.
-• Replaced STT-driven interruption with manual interrupt calls only when filter returns "interrupt".
-• Added:
+* **ignore** → filler/noise
+* **interrupt** → agent stops speaking
+* **speech** → normal user input
 
-min_interruption_words=2
+### **New Logic Introduced**
 
-This prevents VAD from triggering interruption until at least 2 words are transcribed, blocking single-word utterances (filler or otherwise) from causing automatic VAD-level interruption.
+* Token-based detection of filler words: `"uh", "umm", "hmm", "haan", "han", "mhm", "mm", "ah", "aha", "oh", "uh-huh", "mhmm"`
+* Confidence-aware filtering:
 
-    •	Updated interrupt logic:
+  * Filler-only → ignored regardless of confidence
+  * Non-filler → requires confidence ≥ **0.6**
+* Async locking to prevent race conditions between VAD, STT, and agent speech state
+* Runtime-configurable ignored-word list via:
 
-if outcome == "interrupt" and not ev.is_final:
-await session.interrupt()
+  * Constructor argument
+  * Environment variable: `IGNORED_WORDS="uh,umm,..."`
 
-Only interim transcripts trigger manual interruption; final transcripts are evaluated but don't call interrupt (since speech has already ended).
+### **Changes Inside `basic_agent.py`**
 
-### 2. What Works (Verified)
+* Integrated `InterruptionFilter` into `UserInputTranscribedEvent`
 
-Filler-handling
+* Removed STT-driven interruption; now only manual interrupts from filter
 
-- Saying "uh", "umm", "hmm", "haan", "han", "mhm", "mm", "ah", "aha", "oh", "uh-huh", "mhmm" no longer interrupts
-- Multi-filler phrases ("oh umm hmm") also do not interrupt
-- Low-confidence noisy fragments are ignored
+* Added:
 
-Real-speech detection
+  ```python
+  min_interruption_words = 2
+  ```
 
-- "stop", "wait", "hey stop talking", "listen", "can you help" → interrupts correctly
-- Mixed speech like "umm can you help" → interrupts
-- Behavior matches unit tests in test_interrupt_handler.py
+  Prevents VAD interruptions from single-word transcripts
 
-Other Behaviors
+* Updated interrupt logic:
 
-- Filter evaluates both interim and final transcripts; manual interruption triggered only on interim transcripts
-- Agent state changes are synced properly using async task
-- All 7 provided unit tests pass consistently
+  ```python
+  if outcome == "interrupt" and not ev.is_final:
+      await session.interrupt()
+  ```
 
-### 3. Known Issues / Limitations
+Only interim transcripts can trigger manual interruption.
 
-These are SDK-level constraints, not bugs in your module, but worth documenting:
+## 2. What Works (Verified)
 
-1. LiveKit SDK Logging Error
+### **Filler-handling**
 
-Occasional multiprocessing logger traceback:
+* All filler words listed above no longer interrupt
+* Multi-filler sequences ("oh umm hmm") safely ignored
+* Low-confidence noise is ignored
 
-TypeError: can't pickle multidict.\_multidict.CIMultiDictProxy
+### **Real-speech detection**
 
-This happens during shutdown of worker processes.
-Harmless — does not affect behavior.
+Correctly interrupts on:
 
-2. STT/TTS Rate Limit (HTTP 429)
+* "stop"
+* "wait"
+* "hey stop talking"
+* "listen"
+* "can you help"
 
-Sometimes:
+Mixed phrases like "umm can you help" also interrupt.
 
-WSServerHandshakeError: 429
+### **Other Verified Behaviors**
 
-or
+* Interim and final transcripts evaluated (interrupt only on interim)
+* Async task sync works properly for agent state
+* All 7 unit tests pass
 
-APIStatusError: 429
+## 3. Known Issues / Limitations
 
-Occurs when LiveKit cloud is busy.
-Not related to interruption logic.
+### **1. LiveKit SDK Logging Error**
 
-3. High Background Noise
+Occasional traceback:
 
-In a noisy room, VAD may fire transcripts like:
+```
+TypeError: can't pickle multidict._multidict.CIMultiDictProxy
+```
 
-"oh," with confidence 1.0
+Harmless; happens during worker shutdown.
 
-Your filter correctly ignores them, but:
-• STT latency spikes
-• TTS resumes later
-• Interruption feels delayed
+### **2. STT/TTS Rate Limit (HTTP 429)**
 
-This is environmental, not algorithmic.
+Possible:
 
-4. Interim transcript timing
+* `WSServerHandshakeError: 429`
+* `APIStatusError: 429`
 
-Because the SDK passes interim transcripts after VAD, a very loud single-word utterance may still briefly appear, but is correctly ignored by the filter.
+Due to LiveKit cloud load; unrelated to interruption logic.
 
-### 4. Steps to Test the Feature
+### **3. High Background Noise**
 
-1. Install repo in editable mode
+VAD may produce tokens like `"oh,"` with high confidence.
+Filter ignores them, but:
 
-From the repository root:
+* STT latency increases
+* TTS resume may feel delayed
+
+### **4. Interim Transcript Timing**
+
+Very loud single words may still appear due to VAD timing but get ignored correctly.
+
+## 4. Steps to Test the Feature
+
+### **1. Install repo in editable mode**
 
 ```bash
 pip install -e livekit-agents
 ```
 
-Or install all dev dependencies:
+Or:
 
 ```bash
 pip install -e "livekit-agents[dev]"
 ```
 
-2. Start the agent
+### **2. Start the agent**
 
+```bash
 python3 examples/voice_agents/basic_agent.py dev
+```
 
-3. Test filler-handling
+### **3. Test filler-handling**
 
 Speak while the agent is talking:
-• "uh"
-• "umm"
-• "hmm"
-• "mhmm"
-• "mm-hmm"
-• "haan"
-• "uh-huh"
-• "ah"
-• "oh"
 
-Expected:
-Agent continues speaking
-You should see logs:
+* "uh"
+* "umm"
+* "hmm"
+* "mhmm"
+* "mm-hmm"
+* "haan"
+* "uh-huh"
+* "ah"
+* "oh"
 
+**Expected:** Agent continues speaking
+
+Log:
+
+```
 DEBUG Ignoring filler/noise while agent speaking
+```
 
-Note: "okay" and "yeah" are NOT in the default ignored list and WILL interrupt.
+Note: "okay" and "yeah" **will interrupt**.
 
-4. Test real interrupt
+### **4. Test real interrupt**
 
 Say:
-• “stop”
-• “wait wait”
-• “stop talking”
-• “can you help me”
-• “hey listen to me”
 
-Expected:
-Agent stops immediately
-You should see:
+* "stop"
+* "wait wait"
+* "stop talking"
+* "can you help me"
+* "hey listen to me"
 
+**Expected:** Agent stops immediately
+
+```
 INFO Interrupting agent due to user speech
+```
 
-5. Test mixed phrases
+### **5. Test mixed phrases**
 
-Say:
-• “umm can you help”
-• “oh stop”
-• “hmm wait”
+* "umm can you help"
+* "oh stop"
+* "hmm wait"
 
-Expected:
-Interrupts correctly.
+Expected: Interrupts
 
-6. Verify unit tests
+### **6. Verify unit tests**
 
+```bash
 PYTHONPATH=livekit-agents pytest tests/test_interrupt_handler.py
+```
 
-### 5. Environment Details
+## 5. Environment Details
 
-Python Version
-• Python 3.9 (tested)
-• Compatible with 3.10–3.12
+### **Python Version**
 
-Dependencies
-• livekit-agents >= 1.3.2
-• livekit-rtc
-• aiohttp
-• silero
-• python-dotenv
-• pytest (for tests)
+* Tested: 3.9
+* Compatible: 3.10–3.12
 
-Configuration
+### **Dependencies**
 
-Optional environment override:
+* livekit-agents ≥ 1.3.2
+* livekit-rtc
+* aiohttp
+* silero
+* python-dotenv
+* pytest
 
-export IGNORED_WORDS="uh,umm,hmm,oh,mm,mhm"
+### **Hardware Considerations**
 
-Hardware Considerations
-• Use a directional mic
-• Reduce fan/AC noise
-• Avoid laptop mic when possible
+* Prefer directional microphone
+* Minimize fan/AC noise
+* Avoid laptop mics when possible
 
-High noise exaggerates STT confidence and can delay uninterrupted TTS.
+High noise can inflate STT confidence and delay uninterrupted TTS.
+
+---
 
 <!--BEGIN_BANNER_IMAGE-->
 
