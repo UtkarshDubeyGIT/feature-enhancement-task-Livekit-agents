@@ -10,9 +10,9 @@ Decision = Literal["ignore", "interrupt", "speech"]
 
 
 class InterruptionFilter:
-    """Extension-layer interruption filter for LiveKit voice agents."""
+    """Interruption filter for LiveKit voice agents."""
 
-    DEFAULT_IGNORED_WORDS: tuple[str, ...] = ("uh", "umm", "hmm", "haan")
+    DEFAULT_IGNORED_WORDS: tuple[str, ...] = ("uh","umm","hmm","haan","han","mhm","mm","ah","aha","oh","uh-huh","mhmm")
     CONFIDENCE_THRESHOLD = 0.6
 
     _WORD_RE = re.compile(r"[\w']+")
@@ -32,8 +32,7 @@ class InterruptionFilter:
         self._ignored_set = set(initial_words)
         self._agent_speaking = False
 
-        # Create the asyncio.Lock up front to avoid lazy-race conditions.
-        # Creating the lock in __init__ is fine — it will bind to the current loop when used.
+        # Lock created upfront to avoid race conditions.
         self._lock: asyncio.Lock = asyncio.Lock()
 
         self._logger = logging.getLogger(__name__)
@@ -70,7 +69,7 @@ class InterruptionFilter:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             # No running loop — run the async API synchronously (useful in tests).
-            return asyncio.run(self.handle_transcription_event(text, confidence, None))
+            return asyncio.new_event_loop().run_until_complete(self.handle_transcription_event(text, confidence, None))
 
         # If there *is* a running loop, we do NOT block it; the caller should use async API.
         raise RuntimeError(
@@ -101,7 +100,9 @@ class InterruptionFilter:
         if not tokens:
             return "ignore"
 
-        # If confidence is low, treat as noise (ignore) even if tokens look real.
+        all_filler = all(token in self._ignored_set for token in tokens)
+        if all_filler:
+            return "ignore"
         if confidence < self.CONFIDENCE_THRESHOLD:
             return "ignore"
 

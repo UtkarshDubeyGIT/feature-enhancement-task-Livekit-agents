@@ -17,7 +17,7 @@ from livekit.agents import (
     metrics,
     room_io,
 )
-from livekit.agents.voice.interrupt_handler import InterruptionFilter
+from livekit.agents.voice import InterruptionFilter
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -97,6 +97,8 @@ async def entrypoint(ctx: JobContext):
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
+        # Require at least 2 words before VAD interruption - prevents single filler words from stopping agent
+        min_interruption_words=2,
         # allow the LLM to generate a response while waiting for the end of turn
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
@@ -123,18 +125,13 @@ async def entrypoint(ctx: JobContext):
     # shutdown callbacks are triggered when the session is over
     ctx.add_shutdown_callback(log_usage)
 
-    async def _stop_tts() -> None:
-        try:
-            await session.interrupt()
-        except Exception:
-            logger.exception("Failed to interrupt TTS playback")
-
     @session.on("agent_state_changed")
     def _on_agent_state_changed(ev: AgentStateChangedEvent):
         # schedule the async setter — non-blocking for the event loop
         asyncio.create_task(interruption_filter.set_agent_speaking(ev.new_state == "speaking"))
 
-    async def _handle_transcript(ev: UserInputTranscribedEvent) -> None:
+    # Handle all transcripts (interim and final) through our filter
+    async def _filtered_interrupt_check(ev: UserInputTranscribedEvent) -> None:
         confidence = getattr(ev, "confidence", 1.0)
         speaker_id = getattr(ev, "speaker_id", None)
         outcome = await interruption_filter.handle_transcription_event(
@@ -143,12 +140,14 @@ async def entrypoint(ctx: JobContext):
             speaker_id,
         )
 
-        if outcome == "interrupt":
-            await _stop_tts()
+        # If filter says interrupt AND it's interim (real-time), manually interrupt
+        # The min_interruption_words setting already blocks single-word VAD interrupts
+        if outcome == "interrupt" and not ev.is_final:
+            await session.interrupt()
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
-        asyncio.create_task(_handle_transcript(ev))
+        asyncio.create_task(_filtered_interrupt_check(ev))
 
     await session.start(
         agent=MyAgent(),

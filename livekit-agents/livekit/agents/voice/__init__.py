@@ -22,6 +22,7 @@ from .room_io import (
     _ParticipantTranscriptionOutput,
 )
 from .speech_handle import SpeechHandle
+from .interrupt_handler import InterruptionFilter
 from .transcription import TranscriptSynchronizer
 
 __all__ = [
@@ -51,6 +52,7 @@ __all__ = [
     "_ParticipantAudioOutput",
     "_ParticipantTranscriptionOutput",
     "_ParticipantStreamTranscriptionOutput",
+    "InterruptionFilter",
 ]
 
 # Cleanup docs of unexported modules

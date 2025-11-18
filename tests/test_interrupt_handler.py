@@ -13,7 +13,7 @@ def _ensure_event_loop() -> None:
 
 def _make_filter() -> InterruptionFilter:
     _ensure_event_loop()
-    return InterruptionFilter(ignored_words=["uh", "umm", "hmm", "haan"])
+    return InterruptionFilter(ignored_words=["uh","umm","hmm","haan","han","mhm","mm","ah","aha","oh","Uh-huh"])
 
 
 def test_filler_word_ignored_while_speaking():
